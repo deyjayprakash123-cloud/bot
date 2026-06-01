@@ -1,26 +1,22 @@
 """
-BGMI Redeem Code Bot
-====================
-Telegram bot that collects a BGMI Player ID and redeem code, stores the
-order in SQLite, and forwards all details to the admin.
+BGMI Redeem Code Bot — Render Web Service Edition
+==================================================
+Runs as an HTTPS webhook server on Render.
+Render provides PORT and RENDER_EXTERNAL_HOSTNAME automatically.
 
-Compatibility
--------------
-  Python            : 3.12+
-  python-telegram-bot: 21.x  (Application / ConversationHandler API)
+Environment Variables (set in Render dashboard)
+------------------------------------------------
+  BOT_TOKEN              – Telegram bot token from @BotFather  (REQUIRED)
+  ADMIN_CHAT_ID          – Admin Telegram chat ID               (default: 8876073547)
+  RENDER_EXTERNAL_HOSTNAME – Auto-set by Render (do NOT set manually)
+  PORT                   – Auto-set by Render (do NOT set manually)
 
-Environment Variables
----------------------
-  BOT_TOKEN      – Telegram bot token from @BotFather  (required)
-  ADMIN_CHAT_ID  – Admin's Telegram chat ID             (default: 8445891484)
-
-Deployment (Render Background Worker)
---------------------------------------
+Deployment (Render Web Service)
+--------------------------------
   Build : pip install -r requirements.txt
   Start : python bot.py
 """
 
-import asyncio
 import logging
 import os
 import sqlite3
@@ -40,10 +36,10 @@ from telegram.ext import (
 )
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Logging — configured first so every module sees it
+# Logging — stdout so Render streams it to the log panel immediately
 # ──────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
-    stream=sys.stdout,                          # Render streams stdout to logs
+    stream=sys.stdout,
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     level=logging.INFO,
@@ -51,20 +47,28 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Environment variables
+# Configuration — read from environment (set in Render dashboard)
 # ──────────────────────────────────────────────────────────────────────────────
-load_dotenv()  # no-op when vars are already set (e.g. on Render)
+load_dotenv()  # no-op on Render; useful for local .env file
 
 BOT_TOKEN: str = os.environ.get("BOT_TOKEN", "")
 if not BOT_TOKEN:
-    logger.critical("BOT_TOKEN environment variable is not set. Exiting.")
+    logger.critical("BOT_TOKEN is not set. Set it in the Render environment variables.")
     sys.exit(1)
 
-ADMIN_CHAT_ID: int = int(os.environ.get("ADMIN_CHAT_ID", "8445891484"))
-logger.info("Admin chat ID: %d", ADMIN_CHAT_ID)
+ADMIN_CHAT_ID: int = int(os.environ.get("ADMIN_CHAT_ID", "8876073547"))
+
+# Render injects these two automatically for every Web Service
+PORT: int = int(os.environ.get("PORT", 10000))
+RENDER_HOST: str = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "")
+
+logger.info("Python %s", sys.version)
+logger.info("Admin chat ID : %d", ADMIN_CHAT_ID)
+logger.info("Listening on port: %d", PORT)
+logger.info("Render host   : %s", RENDER_HOST or "(not set — running locally)")
 
 # ──────────────────────────────────────────────────────────────────────────────
-# SQLite – auto-select persistent path on Render (/data) or local fallback
+# SQLite — use /data (Render persistent disk) when available, else local dir
 # ──────────────────────────────────────────────────────────────────────────────
 _DATA_DIR = "/data" if os.path.isdir("/data") else "."
 DB_PATH = os.path.join(_DATA_DIR, "orders.db")
@@ -163,7 +167,7 @@ async def receive_bgmi_id(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "⚠️ BGMI ID cannot be empty. Please send your *BGMI Player ID*.",
             parse_mode="Markdown",
         )
-        return BGMI_ID  # stay in same state
+        return BGMI_ID
 
     context.user_data["bgmi_id"] = bgmi_id
     logger.info("BGMI ID from user %d: %s", update.effective_user.id, bgmi_id)
@@ -185,17 +189,17 @@ async def receive_redeem_code(update: Update, context: ContextTypes.DEFAULT_TYPE
             "⚠️ Redeem code cannot be empty. Please send a valid *Redeem Code*.",
             parse_mode="Markdown",
         )
-        return REDEEM_CODE  # stay in same state
+        return REDEEM_CODE
 
-    user        = update.effective_user
-    bgmi_id     = context.user_data["bgmi_id"]
-    order_id    = str(uuid.uuid4())[:8].upper()
+    user         = update.effective_user
+    bgmi_id      = context.user_data["bgmi_id"]
+    order_id     = str(uuid.uuid4())[:8].upper()
     submitted_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    username    = user.username  # may be None
+    username     = user.username  # may be None
 
     logger.info("New order %s from user %d", order_id, user.id)
 
-    # ── Persist ──────────────────────────────────────────────────────────────
+    # ── Persist to SQLite ────────────────────────────────────────────────────
     try:
         save_order(
             order_id=order_id,
@@ -215,12 +219,12 @@ async def receive_redeem_code(update: Update, context: ContextTypes.DEFAULT_TYPE
     # ── Notify admin ─────────────────────────────────────────────────────────
     admin_msg = (
         "🆕 *New Order Received!*\n\n"
-        f"🆔 Order ID   : `{order_id}`\n"
-        f"👤 Username   : @{username or 'N/A'}\n"
-        f"🔢 TG User ID : `{user.id}`\n"
-        f"🎮 BGMI ID    : `{bgmi_id}`\n"
-        f"🎟️ Redeem Code : `{redeem_code}`\n"
-        f"🕒 Submitted  : {submitted_at}"
+        f"🆔 Order ID    : `{order_id}`\n"
+        f"👤 Username    : @{username or 'N/A'}\n"
+        f"🔢 TG User ID  : `{user.id}`\n"
+        f"🎮 BGMI ID     : `{bgmi_id}`\n"
+        f"🎟️ Redeem Code  : `{redeem_code}`\n"
+        f"🕒 Submitted   : {submitted_at}"
     )
     try:
         await context.bot.send_message(
@@ -230,7 +234,6 @@ async def receive_redeem_code(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         logger.info("Admin notified for order %s.", order_id)
     except Exception as exc:
-        # Order is already saved — admin can use /orders as fallback
         logger.error("Failed to notify admin for order %s: %s", order_id, exc)
 
     # ── Confirm to user ───────────────────────────────────────────────────────
@@ -283,7 +286,6 @@ async def orders_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
     message = "\n".join(lines)
-    # Chunk to respect Telegram's 4096-char limit
     for i in range(0, len(message), 4000):
         await update.message.reply_text(message[i : i + 4000], parse_mode="Markdown")
 
@@ -306,11 +308,11 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Bootstrap
+# Application factory
 # ══════════════════════════════════════════════════════════════════════════════
 
 def build_app() -> Application:
-    """Construct and wire up the Application."""
+    """Wire up all handlers and return the Application."""
     app = Application.builder().token(BOT_TOKEN).build()
 
     conv = ConversationHandler(
@@ -329,20 +331,36 @@ def build_app() -> Application:
     return app
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Entry point
+# ══════════════════════════════════════════════════════════════════════════════
+
 def main() -> None:
-    """Initialise DB, build the app, and start long-polling."""
-    logger.info("Python %s", sys.version)
     init_db()
-
     app = build_app()
-    logger.info("Bot starting — polling for updates …")
 
-    # run_polling() manages its own event loop internally via asyncio.run().
-    # Do NOT call asyncio.run() yourself — let the library handle it.
-    app.run_polling(
-        drop_pending_updates=True,   # ignore messages sent while bot was offline
-        allowed_updates=Update.ALL_TYPES,
-    )
+    if RENDER_HOST:
+        # ── Webhook mode (Render Web Service) ────────────────────────────────
+        # Render assigns a public HTTPS URL and injects PORT + RENDER_EXTERNAL_HOSTNAME.
+        # We use the bot token as the URL path so random actors can't post fake updates.
+        webhook_url = f"https://{RENDER_HOST}/{BOT_TOKEN}"
+        logger.info("Starting in WEBHOOK mode: %s", webhook_url)
+
+        app.run_webhook(
+            listen="0.0.0.0",          # bind to all interfaces inside the container
+            port=PORT,                  # Render's injected port (usually 10000)
+            url_path=BOT_TOKEN,         # secret path — only Telegram knows it
+            webhook_url=webhook_url,    # tells Telegram where to send updates
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES,
+        )
+    else:
+        # ── Polling mode (local development) ────────────────────────────────
+        logger.info("RENDER_EXTERNAL_HOSTNAME not set — starting in POLLING mode.")
+        app.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES,
+        )
 
 
 if __name__ == "__main__":

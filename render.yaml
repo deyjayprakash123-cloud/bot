@@ -1,5 +1,5 @@
 services:
-  - type: worker                    # Background Worker — never sleeps, perfect for bots
+  - type: web                       # Web Service — has a public HTTPS URL for webhooks
     name: bgmi-redeem-bot
     runtime: python
     buildCommand: pip install -r requirements.txt
@@ -8,10 +8,6 @@ services:
       - key: BOT_TOKEN
         sync: false                 # Secret — set manually in Render dashboard
       - key: ADMIN_CHAT_ID
-        value: "8445891484"         # Pre-filled; override in dashboard if needed
+        value: "8876073547"
       - key: PYTHON_VERSION
         value: "3.12.7"
-    disk:
-      name: bot-data
-      mountPath: /data              # Persistent disk — SQLite DB survives redeploys
-      sizeGB: 1
