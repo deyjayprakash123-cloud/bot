@@ -1,22 +1,30 @@
 """
 BGMI Redeem Code Bot
 ====================
-A Telegram bot that collects a user's BGMI ID and redeem code,
-saves the order to SQLite, and forwards the details to an admin.
+Telegram bot that collects a BGMI Player ID and redeem code, stores the
+order in SQLite, and forwards all details to the admin.
 
-Environment Variables:
-    BOT_TOKEN       - Telegram bot token from @BotFather (required)
-    ADMIN_CHAT_ID   - Telegram chat ID of the admin (default: 8445891484)
+Compatibility
+-------------
+  Python            : 3.12+
+  python-telegram-bot: 21.x  (Application / ConversationHandler API)
 
-Deployment:
-    Render Background Worker
-    Build:  pip install -r requirements.txt
-    Start:  python bot.py
+Environment Variables
+---------------------
+  BOT_TOKEN      – Telegram bot token from @BotFather  (required)
+  ADMIN_CHAT_ID  – Admin's Telegram chat ID             (default: 8445891484)
+
+Deployment (Render Background Worker)
+--------------------------------------
+  Build : pip install -r requirements.txt
+  Start : python bot.py
 """
 
+import asyncio
 import logging
 import os
 import sqlite3
+import sys
 import uuid
 from datetime import datetime, timezone
 
@@ -26,50 +34,50 @@ from telegram.ext import (
     Application,
     CommandHandler,
     ConversationHandler,
+    ContextTypes,
     MessageHandler,
     filters,
-    ContextTypes,
 )
 
-# ---------------------------------------------------------------------------
-# Load environment variables from .env (local dev only; ignored on Render)
-# ---------------------------------------------------------------------------
-load_dotenv()
-
-BOT_TOKEN: str = os.environ["BOT_TOKEN"]          # raises KeyError if missing
-ADMIN_CHAT_ID: int = int(os.environ.get("ADMIN_CHAT_ID", "8445891484"))
-
-# ---------------------------------------------------------------------------
-# Logging configuration
-# ---------------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# Logging — configured first so every module sees it
+# ──────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
+    stream=sys.stdout,                          # Render streams stdout to logs
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# SQLite database path
-# On Render, use the persistent disk mounted at /data so the DB survives
-# redeploys.  Locally (or any other host) fall back to the working directory.
-# ---------------------------------------------------------------------------
-_RENDER_DATA_DIR = "/data"
-DB_PATH = (
-    os.path.join(_RENDER_DATA_DIR, "orders.db")
-    if os.path.isdir(_RENDER_DATA_DIR)
-    else "orders.db"
-)
+# ──────────────────────────────────────────────────────────────────────────────
+# Environment variables
+# ──────────────────────────────────────────────────────────────────────────────
+load_dotenv()  # no-op when vars are already set (e.g. on Render)
 
-# ---------------------------------------------------------------------------
+BOT_TOKEN: str = os.environ.get("BOT_TOKEN", "")
+if not BOT_TOKEN:
+    logger.critical("BOT_TOKEN environment variable is not set. Exiting.")
+    sys.exit(1)
+
+ADMIN_CHAT_ID: int = int(os.environ.get("ADMIN_CHAT_ID", "8445891484"))
+logger.info("Admin chat ID: %d", ADMIN_CHAT_ID)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SQLite – auto-select persistent path on Render (/data) or local fallback
+# ──────────────────────────────────────────────────────────────────────────────
+_DATA_DIR = "/data" if os.path.isdir("/data") else "."
+DB_PATH = os.path.join(_DATA_DIR, "orders.db")
+
+# ──────────────────────────────────────────────────────────────────────────────
 # ConversationHandler states
-# ---------------------------------------------------------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 BGMI_ID, REDEEM_CODE = range(2)
 
 
-# ===========================================================================
+# ══════════════════════════════════════════════════════════════════════════════
 # Database helpers
-# ===========================================================================
+# ══════════════════════════════════════════════════════════════════════════════
 
 def init_db() -> None:
     """Create the orders table if it does not already exist."""
@@ -87,7 +95,7 @@ def init_db() -> None:
             """
         )
         conn.commit()
-    logger.info("Database initialised at '%s'.", DB_PATH)
+    logger.info("Database ready at '%s'.", DB_PATH)
 
 
 def save_order(
@@ -128,12 +136,12 @@ def fetch_recent_orders(limit: int = 20) -> list[sqlite3.Row]:
         return cursor.fetchall()
 
 
-# ===========================================================================
+# ══════════════════════════════════════════════════════════════════════════════
 # Conversation handlers
-# ===========================================================================
+# ══════════════════════════════════════════════════════════════════════════════
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Entry point: send a welcome message and ask for the BGMI ID."""
+    """Send welcome message and ask for BGMI Player ID."""
     user = update.effective_user
     logger.info("User %s (%d) started the bot.", user.username, user.id)
 
@@ -147,20 +155,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def receive_bgmi_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Validate and store the BGMI ID, then ask for the redeem code."""
+    """Validate the BGMI ID and ask for the redeem code."""
     bgmi_id = update.message.text.strip()
 
-    # --- Validation: reject empty or whitespace-only input ---
     if not bgmi_id:
         await update.message.reply_text(
             "⚠️ BGMI ID cannot be empty. Please send your *BGMI Player ID*.",
             parse_mode="Markdown",
         )
-        return BGMI_ID  # stay in the same state
+        return BGMI_ID  # stay in same state
 
-    # Store temporarily in user_data for this conversation
     context.user_data["bgmi_id"] = bgmi_id
-    logger.info("BGMI ID received from user %d: %s", update.effective_user.id, bgmi_id)
+    logger.info("BGMI ID from user %d: %s", update.effective_user.id, bgmi_id)
 
     await update.message.reply_text(
         f"✅ Got it! BGMI ID: `{bgmi_id}`\n\n"
@@ -171,28 +177,25 @@ async def receive_bgmi_id(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def receive_redeem_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Validate the redeem code, save the order, and notify the admin."""
+    """Validate the redeem code, save the order, and notify admin."""
     redeem_code = update.message.text.strip()
 
-    # --- Validation: reject empty or whitespace-only input ---
     if not redeem_code:
         await update.message.reply_text(
             "⚠️ Redeem code cannot be empty. Please send a valid *Redeem Code*.",
             parse_mode="Markdown",
         )
-        return REDEEM_CODE  # stay in the same state
+        return REDEEM_CODE  # stay in same state
 
-    user = update.effective_user
-    bgmi_id: str = context.user_data["bgmi_id"]
-    order_id: str = str(uuid.uuid4())[:8].upper()   # short 8-char unique ID
-    submitted_at: str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    username: str | None = user.username             # may be None if not set
+    user        = update.effective_user
+    bgmi_id     = context.user_data["bgmi_id"]
+    order_id    = str(uuid.uuid4())[:8].upper()
+    submitted_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    username    = user.username  # may be None
 
-    logger.info(
-        "Redeem code received from user %d. Order ID: %s", user.id, order_id
-    )
+    logger.info("New order %s from user %d", order_id, user.id)
 
-    # --- Persist to SQLite ---
+    # ── Persist ──────────────────────────────────────────────────────────────
     try:
         save_order(
             order_id=order_id,
@@ -203,50 +206,48 @@ async def receive_redeem_code(update: Update, context: ContextTypes.DEFAULT_TYPE
             submitted_at=submitted_at,
         )
     except sqlite3.Error as exc:
-        logger.error("Database error while saving order %s: %s", order_id, exc)
+        logger.error("DB error for order %s: %s", order_id, exc)
         await update.message.reply_text(
-            "❌ An internal error occurred while saving your order. "
-            "Please try again later or contact support."
+            "❌ Internal error while saving your order. Please try again later."
         )
         return ConversationHandler.END
 
-    # --- Notify admin ---
-    admin_message = (
+    # ── Notify admin ─────────────────────────────────────────────────────────
+    admin_msg = (
         "🆕 *New Order Received!*\n\n"
-        f"🆔 Order ID  : `{order_id}`\n"
-        f"👤 Username  : @{username or 'N/A'}\n"
-        f"🔢 TG User ID: `{user.id}`\n"
-        f"🎮 BGMI ID   : `{bgmi_id}`\n"
-        f"🎟️ Redeem Code: `{redeem_code}`\n"
-        f"🕒 Submitted : {submitted_at}"
+        f"🆔 Order ID   : `{order_id}`\n"
+        f"👤 Username   : @{username or 'N/A'}\n"
+        f"🔢 TG User ID : `{user.id}`\n"
+        f"🎮 BGMI ID    : `{bgmi_id}`\n"
+        f"🎟️ Redeem Code : `{redeem_code}`\n"
+        f"🕒 Submitted  : {submitted_at}"
     )
     try:
         await context.bot.send_message(
             chat_id=ADMIN_CHAT_ID,
-            text=admin_message,
+            text=admin_msg,
             parse_mode="Markdown",
         )
         logger.info("Admin notified for order %s.", order_id)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
+        # Order is already saved — admin can use /orders as fallback
         logger.error("Failed to notify admin for order %s: %s", order_id, exc)
-        # Do NOT abort — the order is already saved; admin can use /orders.
 
-    # --- Confirm to user ---
+    # ── Confirm to user ───────────────────────────────────────────────────────
     await update.message.reply_text(
-        f"🎉 *Thank you!* Your order has been submitted and will be processed shortly.\n\n"
+        "🎉 *Thank you!* Your order has been submitted and will be processed shortly.\n\n"
         f"📦 Order ID: `{order_id}`\n"
         "We'll get back to you once the redeem code is applied. 🚀",
         parse_mode="Markdown",
     )
 
-    # Clear temporary conversation data
     context.user_data.clear()
     return ConversationHandler.END
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Allow the user to abort the conversation at any time with /cancel."""
-    logger.info("User %d cancelled the conversation.", update.effective_user.id)
+    """Let the user abort the conversation with /cancel."""
+    logger.info("User %d cancelled.", update.effective_user.id)
     context.user_data.clear()
     await update.message.reply_text(
         "❌ Order cancelled. Send /start whenever you want to try again."
@@ -254,19 +255,16 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
-# ===========================================================================
+# ══════════════════════════════════════════════════════════════════════════════
 # Admin command
-# ===========================================================================
+# ══════════════════════════════════════════════════════════════════════════════
 
 async def orders_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin-only: display the 20 most recent orders."""
+    """Admin-only: show the 20 most recent orders."""
     user = update.effective_user
 
-    # Only allow the designated admin to use this command
     if user.id != ADMIN_CHAT_ID:
-        logger.warning(
-            "Unauthorised /orders attempt by user %d (%s).", user.id, user.username
-        )
+        logger.warning("Unauthorised /orders attempt by user %d.", user.id)
         await update.message.reply_text("⛔ You are not authorised to use this command.")
         return
 
@@ -284,69 +282,67 @@ async def orders_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f"{row['submitted_at']}"
         )
 
-    # Telegram message length limit is 4096 chars; chunk if needed
     message = "\n".join(lines)
-    if len(message) <= 4096:
-        await update.message.reply_text(message, parse_mode="Markdown")
-    else:
-        # Send in chunks of 4000 chars
-        for i in range(0, len(message), 4000):
-            await update.message.reply_text(
-                message[i : i + 4000], parse_mode="Markdown"
-            )
+    # Chunk to respect Telegram's 4096-char limit
+    for i in range(0, len(message), 4000):
+        await update.message.reply_text(message[i : i + 4000], parse_mode="Markdown")
 
 
-# ===========================================================================
+# ══════════════════════════════════════════════════════════════════════════════
 # Global error handler
-# ===========================================================================
+# ══════════════════════════════════════════════════════════════════════════════
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Log unhandled exceptions and optionally notify the admin."""
-    logger.error("Unhandled exception:", exc_info=context.error)
-
-    # Try to notify admin about the error
+    """Log every unhandled exception and ping the admin."""
+    logger.error("Unhandled exception", exc_info=context.error)
     try:
         await context.bot.send_message(
             chat_id=ADMIN_CHAT_ID,
             text=f"⚠️ Bot error:\n<code>{context.error}</code>",
             parse_mode="HTML",
         )
-    except Exception:  # noqa: BLE001
-        pass  # If admin notification fails, just log and move on
+    except Exception:
+        pass
 
 
-# ===========================================================================
-# Application bootstrap
-# ===========================================================================
+# ══════════════════════════════════════════════════════════════════════════════
+# Bootstrap
+# ══════════════════════════════════════════════════════════════════════════════
 
-def main() -> None:
-    """Build and run the bot."""
-    init_db()
-
+def build_app() -> Application:
+    """Construct and wire up the Application."""
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # ----- Conversation: collect BGMI ID → Redeem Code -----
-    conv_handler = ConversationHandler(
+    conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            BGMI_ID: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_bgmi_id)
-            ],
-            REDEEM_CODE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_redeem_code)
-            ],
+            BGMI_ID:     [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_bgmi_id)],
+            REDEEM_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_redeem_code)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        # Persist conversation across bot restarts if you add persistence later
         allow_reentry=True,
     )
 
-    app.add_handler(conv_handler)
+    app.add_handler(conv)
     app.add_handler(CommandHandler("orders", orders_command))
     app.add_error_handler(error_handler)
+    return app
 
-    logger.info("Bot is starting — polling for updates...")
-    app.run_polling(drop_pending_updates=True)
+
+def main() -> None:
+    """Initialise DB, build the app, and start long-polling."""
+    logger.info("Python %s", sys.version)
+    init_db()
+
+    app = build_app()
+    logger.info("Bot starting — polling for updates …")
+
+    # run_polling() manages its own event loop internally via asyncio.run().
+    # Do NOT call asyncio.run() yourself — let the library handle it.
+    app.run_polling(
+        drop_pending_updates=True,   # ignore messages sent while bot was offline
+        allowed_updates=Update.ALL_TYPES,
+    )
 
 
 if __name__ == "__main__":

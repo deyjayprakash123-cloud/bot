@@ -10,7 +10,7 @@ services:
       - key: ADMIN_CHAT_ID
         value: "8445891484"         # Pre-filled; override in dashboard if needed
       - key: PYTHON_VERSION
-        value: "3.11.9"
+        value: "3.12.7"
     disk:
       name: bot-data
       mountPath: /data              # Persistent disk — SQLite DB survives redeploys
