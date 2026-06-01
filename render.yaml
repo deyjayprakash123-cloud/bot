@@ -1,0 +1,17 @@
+services:
+  - type: worker                    # Background Worker — never sleeps, perfect for bots
+    name: bgmi-redeem-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false                 # Secret — set manually in Render dashboard
+      - key: ADMIN_CHAT_ID
+        value: "8445891484"         # Pre-filled; override in dashboard if needed
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+    disk:
+      name: bot-data
+      mountPath: /data              # Persistent disk — SQLite DB survives redeploys
+      sizeGB: 1
