@@ -32,7 +32,7 @@ from telegram.ext import (
 load_dotenv()
 
 BOT_TOKEN: str = os.environ["BOT_TOKEN"]          # raises KeyError if missing
-ADMIN_CHAT_ID: int = int(os.environ["ADMIN_CHAT_ID"])
+ADMIN_CHAT_ID: int = int(os.environ.get("ADMIN_CHAT_ID", "8445891484"))
 
 # ---------------------------------------------------------------------------
 # Logging configuration
