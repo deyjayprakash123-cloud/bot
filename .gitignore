@@ -1,10 +1,26 @@
+# Secrets — never commit
 .env
+
+# SQLite database (generated at runtime)
 orders.db
+*.db
+
+# Python cache
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
 .Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build artifacts
 *.egg-info/
 dist/
 build/
+
+# Render generates this automatically
+.render-buildpacks.json

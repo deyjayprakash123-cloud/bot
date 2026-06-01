@@ -5,8 +5,13 @@ A Telegram bot that collects a user's BGMI ID and redeem code,
 saves the order to SQLite, and forwards the details to an admin.
 
 Environment Variables:
-    BOT_TOKEN       - Telegram bot token from @BotFather
-    ADMIN_CHAT_ID   - Telegram chat ID of the admin account
+    BOT_TOKEN       - Telegram bot token from @BotFather (required)
+    ADMIN_CHAT_ID   - Telegram chat ID of the admin (default: 8445891484)
+
+Deployment:
+    Render Background Worker
+    Build:  pip install -r requirements.txt
+    Start:  python bot.py
 """
 
 import logging
@@ -46,8 +51,15 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # SQLite database path
+# On Render, use the persistent disk mounted at /data so the DB survives
+# redeploys.  Locally (or any other host) fall back to the working directory.
 # ---------------------------------------------------------------------------
-DB_PATH = "orders.db"
+_RENDER_DATA_DIR = "/data"
+DB_PATH = (
+    os.path.join(_RENDER_DATA_DIR, "orders.db")
+    if os.path.isdir(_RENDER_DATA_DIR)
+    else "orders.db"
+)
 
 # ---------------------------------------------------------------------------
 # ConversationHandler states
